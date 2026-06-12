@@ -1,0 +1,910 @@
+---
+title: "Exploring a Large Hospital Data Set"
+author: "Sabine Umuhire"
+date: today
+format:
+  html:
+    embed-resources: true
+    toc: true
+    toc-depth: 3
+    toc-title: "Table of Contents"
+    theme: cosmo
+    code-fold: true
+    code-tools: true
+    df-print: paged
+execute:
+  warning: false
+  message: false
+  cache: false
+---
+
+# Introduction
+
+This report documents an exploratory analysis of a synthetic hospital database containing information on patients, clinical encounters, diagnoses, medications, departments, and providers. The goal is to characterize the data in preparation for integration into a larger analytics database. All analyses were performed in R using tidyverse tools.
+
+```{r setup}
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+library(scales)
+```
+
+---
+
+# Part 1
+
+## A) Data Import
+
+The eight CSV files are imported with `readr::read_csv()`. Missing values encoded as
+`"NULL"` are converted to `NA` at import via the `na` argument. Date-time columns are
+parsed with `lubridate` after import.
+
+```{r import}
+data_path <- "Hospital Data Exploration/"
+
+patients <- read_csv(
+  paste0(data_path, "patients.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+encounters <- read_csv(
+  paste0(data_path, "encounters.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+medications <- read_csv(
+  paste0(data_path, "medications.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+medication_types <- read_csv(
+  paste0(data_path, "medication_types.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+diseases <- read_csv(
+  paste0(data_path, "diseases.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+disease_types <- read_csv(
+  paste0(data_path, "disease_types.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+departments <- read_csv(
+  paste0(data_path, "departments.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+
+providers <- read_csv(
+  paste0(data_path, "providers.csv"),
+  na = c("", "NA", "NULL"),
+  show_col_types = FALSE
+)
+```
+
+```{r parse-dates}
+# Convert date/datetime columns using lubridate
+patients <- patients |>
+  mutate(birth_date = ymd(birth_date))
+
+encounters <- encounters |>
+  mutate(
+    admit_date    = ymd_hms(admit_date),
+    discharge_date = ymd_hms(discharge_date)
+  )
+
+medications <- medications |>
+  mutate(date = ymd_hms(date))
+
+diseases <- diseases |>
+  mutate(date = ymd_hms(date))
+```
+
+All eight tables are now loaded as tidy data frames with proper date/datetime types and
+`NA` for missing values.
+
+---
+
+## B) Data Summary
+
+### B1–B8: Record Counts
+
+```{r counts}
+tibble(
+  Object            = c("Patients", "Encounters", "Medication types",
+                        "Medications (prescribed)", "Disease types",
+                        "Diseases (diagnosed)", "Departments", "Providers"),
+  Count = c(
+    nrow(patients),
+    nrow(encounters),
+    nrow(medication_types),
+    nrow(medications),
+    nrow(disease_types),
+    nrow(diseases),
+    nrow(departments),
+    nrow(providers)
+  )
+) |>
+  mutate(Count = format(Count, big.mark = ",")) |>
+  kable(caption = "Record counts across all tables") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+### B9: Patients Stratified by Sex/Gender, Race/Ethnicity, and Marital Status
+
+The table below shows the number of patients at every combination of gender, race, and
+marital status. Rows with zero patients are omitted for readability.
+
+```{r cross-tab}
+patients |>
+  mutate(
+    gender         = replace_na(gender, "UNKNOWN"),
+    race           = replace_na(race, "UNKNOWN"),
+    marital_status = replace_na(marital_status, "UNKNOWN")
+  ) |>
+  count(gender, race, marital_status, name = "n_patients") |>
+  arrange(gender, race, marital_status) |>
+  rename(
+    Gender         = gender,
+    Race           = race,
+    `Marital Status` = marital_status,
+    `N Patients`   = n_patients
+  ) |>
+  kable(
+    caption = "Number of patients by gender, race/ethnicity, and marital status"
+  ) |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) |>
+  scroll_box(height = "400px")
+```
+
+### B10: Top 10 Most Common Medications, Diseases, Departments, and Providers
+
+**Top 10 Medications (by prescriptions)**
+
+```{r top-meds}
+medications |>
+  left_join(medication_types, by = "medication_id") |>
+  count(medication_id, medication_name, sort = TRUE) |>
+  slice_head(n = 10) |>
+  rename(
+    `Medication ID`   = medication_id,
+    `Medication Name` = medication_name,
+    `Prescription Count` = n
+  ) |>
+  mutate(`Prescription Count` = format(`Prescription Count`, big.mark = ",")) |>
+  kable(caption = "Ten most commonly prescribed medications") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**Top 10 Diseases (by diagnoses)**
+
+```{r top-diseases}
+diseases |>
+  left_join(disease_types, by = "disease_id") |>
+  count(disease_id, name, sort = TRUE) |>
+  slice_head(n = 10) |>
+  rename(
+    `Disease ID`       = disease_id,
+    `Disease Name`     = name,
+    `Diagnosis Count`  = n
+  ) |>
+  mutate(`Diagnosis Count` = format(`Diagnosis Count`, big.mark = ",")) |>
+  kable(caption = "Ten most commonly diagnosed diseases") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**Top 10 Departments (by encounters)**
+
+```{r top-depts}
+encounters |>
+  left_join(departments, by = "department_id") |>
+  count(department_id, department_name, sort = TRUE) |>
+  slice_head(n = 10) |>
+  rename(
+    `Department ID`   = department_id,
+    `Department Name` = department_name,
+    `Encounter Count` = n
+  ) |>
+  mutate(`Encounter Count` = format(`Encounter Count`, big.mark = ",")) |>
+  kable(caption = "Ten departments with the most encounters") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**Top 10 Providers (by encounters, counted by ID)**
+
+Per the instructions, providers are counted by ID (not name), in case multiple providers
+share a name.
+
+```{r top-providers}
+encounters |>
+  left_join(
+    providers |>
+      mutate(full_name = paste(first_name, last_name)),
+    by = "provider_id"
+  ) |>
+  count(provider_id, full_name, sort = TRUE) |>
+  slice_head(n = 10) |>
+  rename(
+    `Provider ID`     = provider_id,
+    `Provider Name`   = full_name,
+    `Encounter Count` = n
+  ) |>
+  mutate(`Encounter Count` = format(`Encounter Count`, big.mark = ",")) |>
+  kable(caption = "Ten providers with the most encounters (counted by provider ID)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+---
+
+## C) Data Manipulation
+
+### C1: Mean BMI by Sex/Gender; by Race/Ethnicity; and by Both
+
+BMI is calculated from height (inches) and weight (pounds) recorded at each encounter.
+The formula is: BMI = (weight_lbs / height_in²) × 703. All encounter-level
+height/weight observations are used (no deduplication by patient here; see Part 2 for
+the latest-only analysis).
+
+```{r bmi-calc}
+# Join encounters with patients to bring in gender and race
+enc_pat <- encounters |>
+  filter(!is.na(height), !is.na(weight), height > 0, weight > 0) |>
+  mutate(bmi = (weight / height^2) * 703) |>
+  left_join(patients |> select(patient_id, gender, race), by = "patient_id") |>
+  mutate(
+    gender = replace_na(gender, "UNKNOWN"),
+    race   = replace_na(race, "UNKNOWN")
+  )
+```
+
+**By sex/gender:**
+
+```{r bmi-gender}
+enc_pat |>
+  group_by(gender) |>
+  summarise(
+    n          = n(),
+    mean_bmi   = round(mean(bmi, na.rm = TRUE), 2),
+    median_bmi = round(median(bmi, na.rm = TRUE), 2),
+    sd_bmi     = round(sd(bmi, na.rm = TRUE), 2)
+  ) |>
+  rename(Gender = gender, N = n, `Mean BMI` = mean_bmi,
+         `Median BMI` = median_bmi, `SD BMI` = sd_bmi) |>
+  kable(caption = "Mean BMI by sex/gender (all encounter observations)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**By race/ethnicity:**
+
+```{r bmi-race}
+enc_pat |>
+  group_by(race) |>
+  summarise(
+    n          = n(),
+    mean_bmi   = round(mean(bmi, na.rm = TRUE), 2),
+    median_bmi = round(median(bmi, na.rm = TRUE), 2),
+    sd_bmi     = round(sd(bmi, na.rm = TRUE), 2)
+  ) |>
+  arrange(desc(n)) |>
+  rename(Race = race, N = n, `Mean BMI` = mean_bmi,
+         `Median BMI` = median_bmi, `SD BMI` = sd_bmi) |>
+  kable(caption = "Mean BMI by race/ethnicity (all encounter observations)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**By sex/gender and race/ethnicity simultaneously:**
+
+```{r bmi-gender-race}
+enc_pat |>
+  group_by(gender, race) |>
+  summarise(
+    n        = n(),
+    mean_bmi = round(mean(bmi, na.rm = TRUE), 2),
+    .groups  = "drop"
+  ) |>
+  arrange(gender, race) |>
+  rename(Gender = gender, Race = race, N = n, `Mean BMI` = mean_bmi) |>
+  kable(caption = "Mean BMI by sex/gender and race/ethnicity") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) |>
+  scroll_box(height = "400px")
+```
+
+### C2: Mean Length of Stay (LOS > 1 day)
+
+LOS is calculated as the difference in days between discharge and admit date. Encounters
+with a missing discharge date or a stay of one day or less are excluded.
+
+```{r los-calc}
+enc_los <- encounters |>
+  filter(!is.na(discharge_date)) |>
+  mutate(los_days = as.numeric(difftime(discharge_date, admit_date, units = "days"))) |>
+  filter(los_days > 1) |>
+  left_join(patients |> select(patient_id, gender), by = "patient_id") |>
+  left_join(departments, by = "department_id") |>
+  mutate(gender = replace_na(gender, "UNKNOWN"))
+```
+
+**Overall mean LOS:**
+
+```{r los-overall}
+enc_los |>
+  summarise(
+    n_encounters = n(),
+    mean_los     = round(mean(los_days), 2),
+    median_los   = round(median(los_days), 2),
+    sd_los       = round(sd(los_days), 2)
+  ) |>
+  rename(`N Encounters` = n_encounters, `Mean LOS (days)` = mean_los,
+         `Median LOS (days)` = median_los, `SD LOS (days)` = sd_los) |>
+  kable(caption = "Overall mean LOS (encounters > 1 day only)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**By sex/gender:**
+
+```{r los-gender}
+enc_los |>
+  group_by(gender) |>
+  summarise(
+    n        = n(),
+    mean_los = round(mean(los_days), 2),
+    .groups  = "drop"
+  ) |>
+  rename(Gender = gender, N = n, `Mean LOS (days)` = mean_los) |>
+  kable(caption = "Mean LOS by sex/gender") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**By department:**
+
+```{r los-dept}
+enc_los |>
+  group_by(department_name) |>
+  summarise(
+    n        = n(),
+    mean_los = round(mean(los_days), 2),
+    .groups  = "drop"
+  ) |>
+  arrange(desc(mean_los)) |>
+  rename(`Department` = department_name, N = n, `Mean LOS (days)` = mean_los) |>
+  kable(caption = "Mean LOS by department (sorted by mean LOS, descending)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) |>
+  scroll_box(height = "400px")
+```
+
+**By sex/gender and department simultaneously:**
+
+```{r los-gender-dept}
+enc_los |>
+  group_by(gender, department_name) |>
+  summarise(
+    n        = n(),
+    mean_los = round(mean(los_days), 2),
+    .groups  = "drop"
+  ) |>
+  arrange(gender, desc(mean_los)) |>
+  rename(Gender = gender, Department = department_name,
+         N = n, `Mean LOS (days)` = mean_los) |>
+  kable(caption = "Mean LOS by sex/gender and department") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) |>
+  scroll_box(height = "500px")
+```
+
+---
+
+## D) Data Visualization
+
+### D1: Histogram of Patient Age at Encounter
+
+```{r hist-age, fig.width=8, fig.height=5}
+encounters |>
+  filter(!is.na(age)) |>
+  ggplot(aes(x = age)) +
+  geom_histogram(binwidth = 5, fill = "steelblue", color = "white", alpha = 0.85) +
+  scale_x_continuous(breaks = seq(0, 120, 10)) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title    = "Distribution of Patient Age at Encounter",
+    subtitle = "All encounters with a recorded age value",
+    x        = "Age (years)",
+    y        = "Number of Encounters"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+### D2: Histogram of Number of Encounters per Patient
+
+```{r hist-enc-count, fig.width=8, fig.height=5}
+enc_counts <- encounters |>
+  count(patient_id, name = "n_encounters")
+
+# Check the distribution to set a sensible x-axis cap
+x_cap <- quantile(enc_counts$n_encounters, 0.99)  # show 99th percentile
+
+enc_counts |>
+  filter(n_encounters <= x_cap) |>
+  ggplot(aes(x = n_encounters)) +
+  geom_histogram(binwidth = 1, fill = "salmon", color = "white", alpha = 0.85) +
+  scale_x_continuous(breaks = seq(0, x_cap, by = 5)) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title    = "Distribution of Number of Encounters per Patient",
+    subtitle = paste0("Showing patients with up to ", x_cap,
+                      " encounters (99th percentile); extreme outliers excluded"),
+    x        = "Number of Encounters",
+    y        = "Number of Patients"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+### D3: Scatterplot of BMI by Age, Colored by Sex/Gender
+
+Due to the large number of observations, a random 5% sample is plotted for readability.
+
+```{r scatter-bmi-age, fig.width=9, fig.height=6}
+set.seed(42)
+
+gender_colors <- c(
+  "F" = "red",
+  "M" = "steelblue",
+  "A" = "forestgreen",
+  "E" = "orange",
+  "U" = "purple"
+)
+
+enc_pat |>
+  filter(!is.na(bmi), bmi > 0, bmi < 100, !is.na(age)) |>
+  slice_sample(prop = 0.05) |>
+  ggplot(aes(x = age, y = bmi, color = gender)) +
+  geom_point(alpha = 0.4, size = 1) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 1.2) +
+  scale_color_manual(
+    values = gender_colors,
+    labels = c(F = "Female", M = "Male", A = "Trans Male",
+               E = "Trans Female", U = "Unknown"),
+    name   = "Sex/Gender"
+  ) +
+  scale_x_continuous(breaks = seq(0, 120, 10)) +
+  labs(
+    title    = "BMI by Age at Encounter, by Sex/Gender",
+    subtitle = "5% random sample of encounter records with valid BMI and age",
+    x        = "Age (years)",
+    y        = "BMI (kg/m²)"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"),
+        legend.position = "bottom")
+```
+
+### D4: Faceted Scatterplots of BMI by Age – by Sex/Gender and Race/Ethnicity
+
+Panels are created for each combination of gender and race. Smaller subgroups (fewer
+than 50 valid BMI observations) are excluded to avoid over-sparse panels.
+
+```{r facet-bmi, fig.width=14, fig.height=10}
+set.seed(42)
+
+# Identify gender × race combos with at least 50 valid BMI records
+keep_combos <- enc_pat |>
+  filter(!is.na(bmi), bmi > 0, bmi < 100, !is.na(age)) |>
+  count(gender, race) |>
+  filter(n >= 50)
+
+enc_pat |>
+  filter(!is.na(bmi), bmi > 0, bmi < 100, !is.na(age)) |>
+  inner_join(keep_combos, by = c("gender", "race")) |>
+  slice_sample(prop = 0.10) |>
+  mutate(
+    gender_label = recode(gender,
+      F = "Female", M = "Male", A = "Trans Male",
+      E = "Trans Female", U = "Unknown"
+    )
+  ) |>
+  ggplot(aes(x = age, y = bmi, color = gender_label)) +
+  geom_point(alpha = 0.25, size = 0.7) +
+  geom_smooth(method = "loess", se = FALSE, linewidth = 0.9) +
+  facet_grid(rows = vars(gender_label), cols = vars(race)) +
+  scale_color_brewer(palette = "Set1", name = "Sex/Gender") +
+  labs(
+    title    = "BMI by Age: Faceted by Sex/Gender (rows) and Race/Ethnicity (columns)",
+    subtitle = "10% random sample; panels with < 50 valid observations excluded",
+    x        = "Age (years)",
+    y        = "BMI (kg/m²)"
+  ) +
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title      = element_text(face = "bold"),
+    legend.position = "none",
+    strip.text      = element_text(size = 8, face = "bold"),
+    axis.text.x     = element_text(size = 7)
+  )
+```
+
+---
+
+## E) Missing Values
+
+```{r missing-rates}
+# Function to compute missingness rate for a data frame
+miss_summary <- function(df, table_name) {
+  df |>
+    summarise(across(everything(), ~ mean(is.na(.)))) |>
+    pivot_longer(everything(), names_to = "Variable", values_to = "Missing Rate") |>
+    mutate(
+      Table            = table_name,
+      `Missing Rate`   = round(`Missing Rate` * 100, 2),
+      `Missing Rate %` = paste0(`Missing Rate`, "%")
+    ) |>
+    select(Table, Variable, `Missing Rate %`)
+}
+
+bind_rows(
+  miss_summary(patients,   "patients"),
+  miss_summary(encounters, "encounters"),
+  miss_summary(medications,"medications"),
+  miss_summary(diseases,   "diseases")
+) |>
+  filter(`Missing Rate %` != "0%") |>
+  kable(caption = "Missingness rates across key tables (variables with any missing)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) |>
+  scroll_box(height = "500px")
+```
+
+### Discussion
+
+Below I discuss the variables most relevant to typical analyses, focusing on those with
+notable missingness rates.
+
+**1. Encounters – `discharge_date`**
+A substantial share of encounters lack a discharge date. This is expected for outpatient
+or same-day visits that were not formally discharged, but it prevents calculation of
+length of stay for those records. Any inpatient-focused analysis (e.g., LOS, resource
+utilization) will be restricted to encounters with a recorded discharge date, which is a
+potentially non-random subset. Analysts should flag this and investigate whether
+discharge-date missingness is related to department type or era.
+
+**2. Encounters – vital signs (`bp_systolic`, `bp_diastolic`, `temperature`, `pulse`,
+`height`, `weight`)**
+All vital sign fields carry meaningful missingness. `height` and `weight` are missing in
+a large fraction of encounters, which directly limits BMI analysis. Missing vitals are
+common in administrative encounter data and may reflect outpatient visits where
+measurements were not routinely recorded. Imputation would be inadvisable without
+clinical context; analyses relying on vitals should use complete-case data and note the
+restriction.
+
+**3. Patients – `race`**
+Race/ethnicity has notable missingness in the patient table. For health equity analyses—
+a primary use case for this kind of hospital data—missing race limits stratification and
+disparity estimation. Race is frequently missing non-randomly (e.g., more often missing
+for certain groups), so complete-case analyses may introduce bias.
+
+**4. Patients – `marital_status`, `occupation`, `religion`**
+These optional sociodemographic fields have meaningful missingness. While less central to
+clinical analyses, they are important for social determinants of health research. The
+default of `"UNKNOWN"` means some apparent non-missingness may reflect the default rather
+than a known value.
+
+**5. Medications – `dose`, `dose_units`, `rate`, `rate_units`**
+Dose and rate information are frequently missing. For pharmacoepidemiological analyses or
+drug utilization review, this limits the ability to assess exposure levels. Presence of
+a medication record without a dose may still be useful for some purposes (e.g.,
+prevalence of prescribing), but any dose-response analysis would be severely hampered.
+
+---
+
+## F) Data Validation
+
+### Ranges and Unreasonable Values
+
+```{r validation-ranges}
+encounters |>
+  select(age, bp_systolic, bp_diastolic, temperature, pulse, height, weight) |>
+  summarise(across(everything(), list(
+    min    = ~ min(., na.rm = TRUE),
+    max    = ~ max(., na.rm = TRUE),
+    mean   = ~ round(mean(., na.rm = TRUE), 1),
+    n_miss = ~ sum(is.na(.))
+  ))) |>
+  pivot_longer(everything(),
+               names_to  = c("Variable", ".value"),
+               names_sep = "_(?=[^_]+$)") |>
+  kable(caption = "Range and missingness of key numeric variables in encounters") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+### Discussion
+
+**1. Age**
+The data dictionary constrains age to 0–120. Values outside this range should be treated
+as errors. It is also worth checking whether patient ages at encounter are consistent
+with calculated ages from birth dates (addressed in Part 2, Option 2). Ages at the very
+extremes (e.g., 0 or 120) are plausible but warrant scrutiny.
+
+**2. Blood Pressure**
+Adult systolic BP is typically 70–200 mmHg and diastolic 40–130 mmHg in clinical
+settings. Any values at or near zero, or extreme outliers (e.g., systolic > 250), are
+likely data entry errors and should be set to missing or reviewed. A check for
+physiologically implausible pulse pressure (systolic − diastolic < 5 or > 200) can also
+flag erroneous pairs.
+
+```{r bp-check}
+encounters |>
+  filter(!is.na(bp_systolic), !is.na(bp_diastolic)) |>
+  summarise(
+    n_systolic_low    = sum(bp_systolic < 50),
+    n_systolic_high   = sum(bp_systolic > 250),
+    n_diastolic_low   = sum(bp_diastolic < 20),
+    n_diastolic_high  = sum(bp_diastolic > 150),
+    n_pp_implausible  = sum((bp_systolic - bp_diastolic) < 5 |
+                              (bp_systolic - bp_diastolic) > 200)
+  ) |>
+  pivot_longer(everything(), names_to = "Check", values_to = "Count") |>
+  kable(caption = "Blood pressure plausibility checks") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**3. Height and Weight / BMI**
+Adult heights below ~48 inches (122 cm) or above ~96 inches (244 cm) are clinically
+implausible for adults. Similarly, weights below ~50 lbs or above ~800 lbs in adult
+populations are likely errors. These should be flagged and set to missing.
+
+```{r bmi-extremes}
+enc_pat |>
+  filter(!is.na(bmi)) |>
+  summarise(
+    n_bmi_low    = sum(bmi < 10),
+    n_bmi_high   = sum(bmi > 70),
+    n_height_low = sum(height < 48, na.rm = TRUE),
+    n_height_high= sum(height > 96, na.rm = TRUE),
+    n_weight_low = sum(weight < 50, na.rm = TRUE),
+    n_weight_high= sum(weight > 700, na.rm = TRUE)
+  ) |>
+  pivot_longer(everything(), names_to = "Check", values_to = "Count") |>
+  kable(caption = "Height, weight, and BMI plausibility checks") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**4. Temperature**
+Normal adult body temperature is roughly 95–106 °F. Values outside this range in the
+data are almost certainly recording errors.
+
+```{r temp-check}
+encounters |>
+  filter(!is.na(temperature)) |>
+  summarise(
+    n_temp_low  = sum(temperature < 90),
+    n_temp_high = sum(temperature > 110),
+    min_temp    = min(temperature),
+    max_temp    = max(temperature)
+  ) |>
+  kable(caption = "Temperature plausibility checks") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**5. Duplicate Records**
+Duplicate encounter records (same `patient_id`, `admit_date`, and `department_id`) may
+indicate data entry duplication.
+
+```{r duplicates}
+dup_encounters <- encounters |>
+  count(patient_id, admit_date, department_id) |>
+  filter(n > 1)
+
+cat("Number of apparent duplicate encounter combinations:",
+    nrow(dup_encounters), "\n")
+
+dup_med <- medications |>
+  count(encounter_id, medication_id, patient_id, date) |>
+  filter(n > 1)
+
+cat("Number of apparent duplicate medication records:",
+    nrow(dup_med), "\n")
+```
+
+**Recommendations**
+Values identified as out-of-range should be set to `NA` rather than deleted so that
+other fields in the same record remain usable. Definitive removal should only follow
+clinical expert review. Duplicate records should be deduplicated by retaining one
+instance, with documentation of the deduplication rule.
+
+---
+
+# Part 2
+
+## Option 1: Latest-BMI-Only Analysis
+
+Repeating the BMI analysis from C1, but using only the *most recent* valid height and
+weight measurement per patient. "Most recent" is defined as the encounter with the
+largest `admit_date` that has non-missing height and weight.
+
+```{r latest-bmi}
+latest_bmi <- encounters |>
+  filter(!is.na(height), !is.na(weight), height > 0, weight > 0) |>
+  mutate(bmi = (weight / height^2) * 703) |>
+  left_join(patients |> select(patient_id, gender, race), by = "patient_id") |>
+  mutate(
+    gender = replace_na(gender, "UNKNOWN"),
+    race   = replace_na(race, "UNKNOWN")
+  ) |>
+  group_by(patient_id) |>
+  slice_max(order_by = admit_date, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+cat("Number of patients with at least one valid BMI:", nrow(latest_bmi), "\n")
+```
+
+**Mean BMI by sex/gender (latest observation only):**
+
+```{r latest-bmi-gender}
+latest_bmi |>
+  group_by(gender) |>
+  summarise(
+    n          = n(),
+    mean_bmi   = round(mean(bmi, na.rm = TRUE), 2),
+    median_bmi = round(median(bmi, na.rm = TRUE), 2),
+    sd_bmi     = round(sd(bmi, na.rm = TRUE), 2),
+    .groups    = "drop"
+  ) |>
+  rename(Gender = gender, N = n, `Mean BMI` = mean_bmi,
+         `Median BMI` = median_bmi, `SD BMI` = sd_bmi) |>
+  kable(caption = "Mean BMI by sex/gender (latest encounter per patient)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**Mean BMI by race/ethnicity (latest observation only):**
+
+```{r latest-bmi-race}
+latest_bmi |>
+  group_by(race) |>
+  summarise(
+    n          = n(),
+    mean_bmi   = round(mean(bmi, na.rm = TRUE), 2),
+    median_bmi = round(median(bmi, na.rm = TRUE), 2),
+    sd_bmi     = round(sd(bmi, na.rm = TRUE), 2),
+    .groups    = "drop"
+  ) |>
+  arrange(desc(n)) |>
+  rename(Race = race, N = n, `Mean BMI` = mean_bmi,
+         `Median BMI` = median_bmi, `SD BMI` = sd_bmi) |>
+  kable(caption = "Mean BMI by race/ethnicity (latest encounter per patient)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**Mean BMI by sex/gender and race/ethnicity (latest observation only):**
+
+```{r latest-bmi-both}
+latest_bmi |>
+  group_by(gender, race) |>
+  summarise(
+    n        = n(),
+    mean_bmi = round(mean(bmi, na.rm = TRUE), 2),
+    .groups  = "drop"
+  ) |>
+  arrange(gender, race) |>
+  rename(Gender = gender, Race = race, N = n, `Mean BMI` = mean_bmi) |>
+  kable(caption = "Mean BMI by sex/gender and race/ethnicity (latest per patient)") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE) |>
+  scroll_box(height = "400px")
+```
+
+**Comparison with all-observations approach**
+
+Restricting to the latest BMI per patient slightly changes the means for most groups
+compared to the all-encounters analysis. This reflects the fact that repeated
+measurements from the same patient are correlated; the all-encounter approach
+overweights patients who appear frequently. The latest-BMI approach provides a more
+patient-level snapshot and is generally preferable for cross-sectional comparisons.
+
+---
+
+## Option 2: Validating Encounter Ages
+
+Each encounter records the patient's age at that visit. We can validate this by
+computing the expected age from `birth_date` and `admit_date` and comparing it to the
+recorded age. Only encounters with a non-missing `admit_date` are used (discharge date
+is not required, per the instructions).
+
+```{r age-validation}
+age_check <- encounters |>
+  filter(!is.na(age), !is.na(admit_date)) |>
+  left_join(patients |> select(patient_id, birth_date), by = "patient_id") |>
+  filter(!is.na(birth_date)) |>
+  mutate(
+    expected_age  = as.integer(interval(birth_date, admit_date) / years(1)),
+    age_match     = (age == expected_age),
+    age_diff      = age - expected_age
+  )
+
+n_total  <- nrow(age_check)
+n_match  <- sum(age_check$age_match, na.rm = TRUE)
+pct_match <- round(n_match / n_total * 100, 2)
+
+cat("Total encounters with age and birth_date:", format(n_total, big.mark = ","), "\n")
+cat("Encounters with correct age:             ", format(n_match, big.mark = ","), "\n")
+cat("Percentage accurate:                     ", pct_match, "%\n")
+```
+
+```{r age-diff-dist, fig.width=8, fig.height=5}
+age_check |>
+  filter(abs(age_diff) <= 10) |>
+  ggplot(aes(x = age_diff)) +
+  geom_histogram(binwidth = 1, fill = "royalblue", color = "white", alpha = 0.85) +
+  scale_y_continuous(labels = label_comma()) +
+  labs(
+    title    = "Distribution of Recorded Age minus Expected Age",
+    subtitle = paste0(pct_match, "% of encounter ages match the birth-date-derived age"),
+    x        = "Recorded Age − Expected Age (years)",
+    y        = "Number of Encounters"
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(plot.title = element_text(face = "bold"))
+```
+
+```{r age-off-by-one}
+age_check |>
+  mutate(
+    accuracy_category = case_when(
+      age_match              ~ "Exact match",
+      abs(age_diff) == 1     ~ "Off by 1 year",
+      abs(age_diff) <= 5     ~ "Off by 2–5 years",
+      TRUE                   ~ "Off by > 5 years"
+    )
+  ) |>
+  count(accuracy_category) |>
+  mutate(
+    pct = round(n / sum(n) * 100, 2),
+    `%` = paste0(pct, "%")
+  ) |>
+  arrange(desc(n)) |>
+  select(accuracy_category, n, `%`) |>
+  rename(`Accuracy Category` = accuracy_category, Count = n) |>
+  kable(caption = "Breakdown of encounter-age accuracy") |>
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"),
+                full_width = FALSE)
+```
+
+**Interpretation**
+
+The encounter-level age field is largely accurate. The most common discrepancy is an
+off-by-one error, which arises naturally when the encounter falls before the patient's
+birthday in a given year: if a patient turns 35 in October but was admitted in January,
+their recorded age might be 34 or 35 depending on how the field was populated (integer
+truncation vs. rounding). This suggests the recorded age is computed by simple year
+subtraction rather than accounting for whether the birthday has passed in the admit year.
+Encounters with discrepancies larger than one year are likely data errors and should be
+flagged for review.
+
+---
